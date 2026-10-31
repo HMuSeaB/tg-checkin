@@ -1,0 +1,6 @@
+telethon>=1.36.0
+fastapi>=0.110.0
+uvicorn>=0.28.0
+pydantic>=2.6.0
+apscheduler>=3.10.4
+python-socks[asyncio]>=2.4.0

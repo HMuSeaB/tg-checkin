@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+# 批处理必须 CRLF，否则 goto / 标签行为异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell 脚本用 CRLF 更稳
+*.ps1 text eol=crlf
+
+# 二进制
+*.png binary
+*.jpg binary
+*.ico binary

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TG 签到面板</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">✓</div>
+      <div>
+        <h1>TG 签到面板</h1>
+        <p class="sub">直接复用本机 Telegram Desktop 会话 · 无需验证码</p>
+      </div>
+    </div>
+    <div class="status-area">
+      <div id="connBadge" class="badge pending"><span class="dot"></span><span id="connText">连接中…</span></div>
+      <button class="icon-btn" id="btnRelogin" title="重新接管桌面端会话">↻</button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <button id="btnRunAll" class="main-btn">
+      <span class="main-btn-icon">⚡</span>
+      <span class="main-btn-text">
+        <strong>一键签到</strong>
+        <small id="mainBtnHint">依次执行全部已启用任务</small>
+      </span>
+    </button>
+    <div class="hero-meta">
+      <div class="meta-item"><span class="meta-label">账号</span><span id="metaUser" class="meta-value">—</span></div>
+      <div class="meta-item"><span class="meta-label">任务</span><span id="metaTasks" class="meta-value">—</span></div>
+      <div class="meta-item"><span class="meta-label">最近结果</span><span id="metaLast" class="meta-value">—</span></div>
+    </div>
+  </section>
+
+  <section class="grid" id="taskGrid"></section>
+
+  <div class="add-row">
+    <button class="add-btn" id="btnAddBot">
+      <span class="add-icon">+</span>
+      <span>添加签到机器人</span>
+    </button>
+    <span class="add-hint">只读探测，不会给 bot 发消息</span>
+  </div>
+
+  <section class="console">
+    <div class="console-head">
+      <span>运行日志</span>
+      <div class="console-actions">
+        <span id="logCount" class="tiny"></span>
+        <button class="mini-btn" id="btnClearLogs">清空</button>
+      </div>
+    </div>
+    <div class="console-body" id="consoleBody"></div>
+  </section>
+
+  <footer class="foot">
+    <span id="footInfo">—</span>
+  </footer>
+</div>
+
+<script src="app.js"></script>
+
+<!-- 添加机器人弹窗 -->
+<div id="addModal" class="modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>添加签到机器人</h3>
+      <button class="icon-btn" id="btnCloseAdd">×</button>
+    </div>
+
+    <div class="modal-body">
+      <label class="field">
+        <span class="field-label">机器人用户名或链接</span>
+        <div class="field-row">
+          <input id="addTarget" class="text-input" placeholder="@SomeEmbyBot 或 t.me/SomeEmbyBot">
+          <button class="mini-btn primary" id="btnProbe">探测</button>
+        </div>
+        <span class="field-hint">探测只读历史消息，不会给 bot 发任何东西</span>
+      </label>
+
+      <div id="probeResult" class="probe-box"></div>
+
+      <label class="field">
+        <span class="field-label">任务名称</span>
+        <input id="addName" class="text-input" placeholder="探测后自动填入">
+      </label>
+
+      <div class="field-pair">
+        <label class="field">
+          <span class="field-label">签到方式</span>
+          <select id="addMode" class="text-input">
+            <option value="button">点按钮</option>
+            <option value="command">发命令</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">每日时间</span>
+          <input id="addCron" class="text-input" value="08:36" placeholder="08:36">
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">先发送的指令</span>
+        <input id="addCommand" class="text-input" value="/start" placeholder="/start">
+      </label>
+
+      <label class="field">
+        <span class="field-label">按钮文字匹配（正则）</span>
+        <input id="addMatch" class="text-input" value="签到" placeholder="签到">
+      </label>
+
+      <div class="check-row">
+        <label class="check"><input type="checkbox" id="addFresh" checked><span>每次先刷新菜单再点按钮</span></label>
+      </div>
+      <p class="warn-text">
+        若该 bot 点签到后会把菜单消息本身改成结果，必须保持勾选，
+        否则会点到已失效的旧面板。
+      </p>
+    </div>
+
+    <div class="modal-foot">
+      <button class="mini-btn" id="btnCancelAdd">取消</button>
+      <button class="mini-btn primary" id="btnSaveAdd">保存任务</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

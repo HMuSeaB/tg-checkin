@@ -1,0 +1,22 @@
+# 本地环境
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# 账号凭据 —— 绝不能提交
+config/settings.json
+config/*.session
+config/*.session-journal
+config/*.session-wal
+config/*.session-shm
+
+# 本地工作记录（含账号 user_id 等信息）
+.workbuddy/
+
+# 归档的早期版本
+_obsolete/
+
+# 系统
+.DS_Store
+Thumbs.db
