@@ -264,6 +264,64 @@ def find_running_telegram_exe() -> Optional[str]:
         return None
 
 
+def _is_tdata_dir(path: str) -> bool:
+    """判断一个目录是不是 Telegram 的 tdata（关键特征文件存在）"""
+    if not os.path.isdir(path):
+        return False
+    return any(os.path.isfile(os.path.join(path, n))
+               for n in ("key_datas", "key_data"))
+
+
+def _scan_common_places() -> List[str]:
+    """
+    扫描常见盘符下的便携版安装位置。
+
+    便携版 Telegram 常被放在非标准目录（如 <盘符>:\\Apps\\Telegram Desktop），
+    而当客户端没运行时无法从进程反推路径，
+    所以这里按"浅层目录 + Telegram 命名"兜底扫一遍。
+
+    只做有限深度（2 层）的目录名匹配，不递归整盘，避免拖慢启动。
+    """
+    found: List[str] = []
+    if os.name != "nt":
+        return found
+
+    import string
+    drives = [f"{d}:\\" for d in string.ascii_uppercase if os.path.isdir(f"{d}:\\")]
+
+    # 一级目录名里出现这些词就往下看一眼
+    hints = ("tools", "apps", "software", "program", "portable", "green",
+             "telegram")
+
+    for drive in drives:
+        try:
+            entries = [e for e in os.listdir(drive)
+                       if os.path.isdir(os.path.join(drive, e))]
+        except (PermissionError, OSError):
+            continue
+        for e in entries:
+            p1 = os.path.join(drive, e)
+            low = e.lower()
+            # 直接就是 tdata
+            if low == "tdata" and _is_tdata_dir(p1):
+                found.append(p1)
+                continue
+            if not any(h in low for h in hints):
+                continue
+            # 往下看一层
+            try:
+                subs = [s for s in os.listdir(p1)
+                        if os.path.isdir(os.path.join(p1, s))]
+            except (PermissionError, OSError):
+                continue
+            for s in subs:
+                p2 = os.path.join(p1, s)
+                for cand in (os.path.join(p2, "tdata"), p2):
+                    if os.path.basename(cand).lower() == "tdata" and _is_tdata_dir(cand):
+                        found.append(cand)
+    return found
+
+
 def find_tdata_dirs() -> List[str]:
     candidates = [
         os.path.join(os.environ.get("APPDATA", ""), "Telegram Desktop", "tdata"),
@@ -276,13 +334,23 @@ def find_tdata_dirs() -> List[str]:
     exe = find_running_telegram_exe()
     if exe:
         candidates.insert(0, os.path.join(os.path.dirname(exe), "tdata"))
+
     seen, out = set(), []
-    for c in candidates:
-        if c and os.path.isdir(c):
+
+    def _add(c: str) -> None:
+        if c and _is_tdata_dir(c):
             real = os.path.realpath(c)
             if real not in seen:
                 seen.add(real)
                 out.append(c)
+
+    for c in candidates:
+        _add(c)
+
+    # 标准位置都没有，才去扫盘（有额外 IO 开销，放最后）
+    if not out:
+        for c in _scan_common_places():
+            _add(c)
     return out
 
 
