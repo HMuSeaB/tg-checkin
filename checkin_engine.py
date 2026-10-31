@@ -19,6 +19,16 @@ logger = logging.getLogger("TGCheckin.Engine")
 API_ID = tdata_session.TDESKTOP_API_ID
 API_HASH = tdata_session.TDESKTOP_API_HASH
 
+# 机器人表达"今天的名额已经用掉了"的说法。
+# 这类回执代表今日任务已完成，但**不是本次签到成功**——
+# 面板要显示成"今日已签"（黄），不能显示成"已完成"（绿），
+# 否则用户会以为刚才是自己签上的。
+ALREADY_WORDS = (
+    "已经签到", "已签到", "已经签过", "已签过", "签过到了",
+    "明天再来", "今日已签", "今日已领取", "已领取过", "已经领取",
+)
+ALREADY_PREFIX = "今日已签到 · "
+
 
 class CheckinEngine:
     def __init__(self):
@@ -306,31 +316,33 @@ class CheckinEngine:
         """
         根据弹窗文本判断结果。
 
-        返回 (ok, detail)：
-          ok=True  签到成功 / 今日已签（都算今日任务已完成）
-          ok=False 明确的失败（如"未注册""请先加入频道"）
-          ok=None  弹窗内容无法判定，交给聊天消息判断
+        返回 (ok, detail, already)：
+          ok=True, already=False  本次签到成功
+          ok=True, already=True   今日已签（名额之前就用掉了，本次没签上）
+          ok=False                明确的失败（如"未注册""请先加入频道"）
+          ok=None                 弹窗内容无法判定，交给聊天消息判断
         """
         text = (popup or "").strip()
         if not text:
-            return None, ""
+            return None, "", False
 
-        done_words = done_words or ["已经签到", "已签到", "已经签过", "已签过", "明天再来",
-                                    "今日已签", "已领取过"]
+        done_words = done_words or ALREADY_WORDS
         fail_words = ["未注册", "未绑定", "请先", "失败", "无效", "不存在", "过期",
                       "积分不足", "权限", "禁止", "冷却", "稍后"]
 
         short = text.replace("\n", " · ")[:120]
 
         if any(w in text for w in done_words):
-            return True, f"今日已签到 · {short}"
-        if any(k in text for k in keywords):
-            return True, short
+            return True, f"{ALREADY_PREFIX}{short}", True
+        # 失败词必须在成功关键词之前判：有些 bot 的成功词宽到只写"签到"，
+        # 先判关键词的话"签到失败"会被当成成功。
         if any(w in text for w in fail_words):
-            return False, short
+            return False, short, False
+        if any(k in text for k in keywords):
+            return True, short, False
         # 有些机器人弹"签到成功，+2 猫币"这类不含固定词的文案，
         # 只要弹窗不是失败语气、也不是"已签"，就当作成功
-        return True, short
+        return True, short, False
 
     async def _cleanup(self, client, sent_msgs: List[Any]) -> None:
         """
@@ -524,12 +536,6 @@ class CheckinEngine:
             entity = await client.get_entity(target)
             baseline = await self._snapshot(client, entity)
 
-            # 先判断今天是否已经签过，避免无意义的重复点击
-            try:
-                recent = await client.get_messages(entity, limit=8)
-            except Exception:
-                recent = []
-            done_today = self._already_done_today(recent, keywords)
             # 先判断今天是否已经签过。命中就**完全不发消息、不点按钮**，
             # 既省事也避免频繁打扰 bot 被对面限流或封禁。
             try:
@@ -542,7 +548,7 @@ class CheckinEngine:
                 self.add_log(f"[{name}] ✓ {detail}（未发送任何消息）", "success")
                 config_mgr.update_task_status(task_id, detail, now, True)
                 return {"id": task_id, "name": name, "ok": True,
-                        "detail": detail, "cached": True}
+                        "detail": detail, "cached": True, "already": True}
 
             # 同一天内对同一 bot 最多真跑 N 次，防止手滑连点被对面判定为滥用
             guard = self._run_guard(task_id)
@@ -618,32 +624,41 @@ class CheckinEngine:
 
             # ① 弹窗回执优先：很多机器人的结果只在 callback 弹窗里，不进聊天记录
             if popup:
-                ok_popup, detail_popup = self._judge_popup(popup, keywords)
+                ok_popup, detail_popup, already_popup = self._judge_popup(popup, keywords)
                 if ok_popup is not None:
+                    mark = "✓ " if already_popup else ("✅ " if ok_popup else "⚠️ ")
                     self.add_log(
-                        f"[{name}] {'✅ ' if ok_popup else '⚠️ '}{detail_popup}",
+                        f"[{name}] {mark}{detail_popup}",
                         "success" if ok_popup else "warn",
                     )
                     config_mgr.update_task_status(task_id, detail_popup, now, ok_popup)
                     if cleanup:
                         await self._cleanup(client, sent_msgs)
                     return {"id": task_id, "name": name, "ok": ok_popup,
-                            "detail": detail_popup, "source": "popup"}
+                            "detail": detail_popup, "source": "popup",
+                            "already": already_popup}
 
             # ② 聊天消息回执
             feedback = await self._collect_feedback(client, entity, baseline)
 
             ok = any(k in feedback for k in keywords) if feedback else bool(clicked_text)
             detail = feedback or (f"已点击「{clicked_text}」" if clicked_text else f"已发送 {command}")
+            # 机器人说"今天已经签过了"时，detail 是它自己的原文，
+            # 不带"今日已签"字样，前端就分不出黄绿，必须在这里统一打标。
+            already = bool(feedback) and any(w in feedback for w in ALREADY_WORDS)
+            if already and not detail.startswith(ALREADY_PREFIX):
+                detail = f"{ALREADY_PREFIX}{detail}"
+            mark = "✓ " if already else ("✅ " if ok else "⚠️ ")
             self.add_log(
-                f"[{name}] {'✅ ' if ok else '⚠️ '}{(detail or '无回执')}"
+                f"[{name}] {mark}{(detail or '无回执')}"
                 + ("" if feedback else "（机器人未回消息）"),
                 "success" if ok else "warn",
             )
             config_mgr.update_task_status(task_id, detail, now, ok)
             if cleanup and ok:
                 await self._cleanup(client, sent_msgs)
-            return {"id": task_id, "name": name, "ok": ok, "detail": detail}
+            return {"id": task_id, "name": name, "ok": ok, "detail": detail,
+                    "already": already}
 
         except Exception as e:
             detail = f"{type(e).__name__}: {e}"
