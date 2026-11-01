@@ -17,6 +17,12 @@ config/*.session-shm
 # 归档的早期版本
 _obsolete/
 
+# 运行时日志（pythonw 无控制台，输出写这里）
+logs/
+
+# 快捷方式带本机绝对路径，换机器要重新生成
+*.lnk
+
 # 系统
 .DS_Store
 Thumbs.db

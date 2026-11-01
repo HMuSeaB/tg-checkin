@@ -8,11 +8,12 @@ import asyncio
 import logging
 import os
 import socket
+import sys
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -20,6 +21,22 @@ import tdata_session
 from checkin_engine import engine
 from config_manager import config_mgr
 from scheduler import scheduler_mgr
+
+# 固定端口，只监听回环地址：面板里的 bot 清单和会话状态不对局域网暴露
+PORT = 8899
+
+# pythonw.exe 启动时 sys.stdout / sys.stderr 都是 None，
+# uvicorn 和 logging 往里写就抛异常，进程直接无声退出——
+# 表现就是"双击快捷方式没反应"。这里先兜住，写到 logs/panel.log。
+if sys.stdout is None or sys.stderr is None:
+    _root = os.path.dirname(os.path.abspath(__file__))
+    _log_dir = os.path.join(_root, "logs")
+    os.makedirs(_log_dir, exist_ok=True)
+    _fh = open(os.path.join(_log_dir, "panel.log"), "a", encoding="utf-8", buffering=1)
+    if sys.stdout is None:
+        sys.stdout = _fh
+    if sys.stderr is None:
+        sys.stderr = _fh
 
 logging.basicConfig(
     level=logging.INFO,
@@ -102,7 +119,7 @@ async def status():
     return {
         **info,
         "local_ip": get_local_ip(),
-        "port": 8899,
+        "port": PORT,
         "scheduler_running": scheduler_mgr.is_running,
         "server_ok": True,
     }
@@ -231,9 +248,42 @@ async def peek(bot: str, limit: int = 5):
 
 static_dir = os.path.join(BASE_DIR, "static")
 os.makedirs(static_dir, exist_ok=True)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """浏览器标签页图标，复用快捷方式那个 app.ico。"""
+    path = os.path.join(BASE_DIR, "app.ico")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="image/x-icon")
+    raise HTTPException(status_code=404)
+
+
 app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
 
+def _port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.6)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 if __name__ == "__main__":
+    import threading
+    import webbrowser
+
+    url = f"http://127.0.0.1:{PORT}"
+
+    # 重复双击快捷方式时不要再起一个实例（第二个进程抢端口会失败），
+    # 直接把已经跑着的那个页面调出来。
+    if _port_in_use(PORT):
+        print(f"面板已在运行：{url}")
+        webbrowser.open(url)
+        raise SystemExit(0)
+
+    # 默认自己开浏览器；从命令行调试时可设 TG_NO_BROWSER=1 关掉
+    if os.environ.get("TG_NO_BROWSER") != "1":
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8899, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="info")

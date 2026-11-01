@@ -32,15 +32,29 @@ source .venv/bin/activate && pip install -r requirements.txt
 
 ### 2. 启动
 
-Windows 双击 `run.bat`，或手动：
+**推荐**：生成一个快捷方式，双击即开，没有黑框。
 
-```bash
-.venv\Scripts\python app.py
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\make_shortcut.ps1
 ```
 
-打开 <http://127.0.0.1:8899>。
+会在项目根生成 `TG签到面板.lnk`（带图标），拖到桌面或任务栏即可。
+它指向 `pythonw.exe`，所以不会弹控制台窗口；浏览器会自动打开面板。
+
+其它方式：
+
+```bash
+run.bat                          # 老办法，会闪一下黑框
+.venv\Scripts\python app.py      # 命令行调试
+```
+
+打开 <http://127.0.0.1:8899>。重复双击不会起第二个实例——检测到端口已占用会直接把现有页面调出来。
 
 启动时自动从本机 Telegram Desktop 的 `tdata` 读出已授权会话，**桌面端不用退出**。
+
+用 `pythonw` 启动时没有控制台，日志写在 `logs/panel.log`。
+
+> 图标可以用 `python tools/make_icon.py` 重新生成（纯标准库，无 Pillow 依赖）。
 
 ### 3. 配置代理
 
