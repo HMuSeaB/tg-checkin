@@ -292,6 +292,43 @@ class CheckinEngine:
                 return text.replace("\n", " · ")[:120]
         return None
 
+    # ---------- 算术验证码(2026-11-03 上线) ----------
+
+    async def _solve_captcha(self, client, entity, min_id: int = 0):
+        """点「签到」后 bot 出了 🧮 算术验证:算答案、点对按钮。
+
+        实测格式(娘口三三 2026-11-03):
+            🧮 签到验证 / 2 + 1 = ? / 请选择正确答案…题目 2 分钟有效
+            按钮: 5 / 10 / 3 / 2
+        题目有时效且只能选一次,所以只认 min_id 之后的新消息,
+        绝不重复消费旧题。返回 (是否遇到验证码, 说明)。
+        """
+        await asyncio.sleep(2)
+        try:
+            msgs = await client.get_messages(entity, limit=4)
+        except Exception as e:
+            return False, f"读消息失败: {e}"
+        cap = next((m for m in msgs
+                    if m.text and "签到验证" in m.text and "=" in m.text
+                    and (m.id or 0) > min_id), None)
+        if cap is None:
+            return False, None
+        m = re.search(r"(\d+)\s*([+\-*×xX])\s*(\d+)\s*=", cap.text)
+        if not m:
+            return True, f"验证码格式不认识: {cap.text[:60]}"
+        a, op, b = int(m.group(1)), m.group(2).replace("X", "x"), int(m.group(3))
+        ans = a + b if op == "+" else a - b if op == "-" else a * b
+        btns = [btn for row in (cap.buttons or []) for btn in row]
+        target = next((btn for btn in btns if btn.text.strip() == str(ans)), None)
+        if target is None:
+            return True, f"算出 {ans} 但选项里没有(选项: {[x.text for x in btns]})"
+        popup = await self._click(target)
+        await asyncio.sleep(2)
+        detail = f"验证码 {a} {op} {b} = {ans},已点对按钮"
+        if popup:
+            detail += f"(弹窗: {str(popup)[:40]})"
+        return True, detail
+
     @staticmethod
     async def _click(btn) -> Optional[str]:
         """
@@ -619,6 +656,17 @@ class CheckinEngine:
                     clicked_text = btn.text
                     popup = await self._click(btn)
                 await asyncio.sleep(3)
+
+                # 算术验证码(2026-11-03 上线):点签到后 bot 才发题,
+                # 答对才算真签到。签到那一下的 popup 是"请验证"提示而非
+                # 结果,清掉避免误判;成败以随后的聊天回执为准。
+                cap_seen, cap_detail = await self._solve_captcha(
+                    client, entity, min_id=max(min_id, 0))
+                if cap_seen:
+                    self.add_log(f"[{name}] 🧮 {cap_detail}",
+                                 "success" if "已点对" in cap_detail else "warn")
+                    popup = None
+                    await asyncio.sleep(2)
 
             cleanup = bool(task.get("cleanup_command", True))
 
