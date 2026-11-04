@@ -218,7 +218,7 @@ class CheckinEngine:
             return 0
 
     async def _collect_feedback(self, client, entity, baseline: Dict[int, str],
-                                timeout: float = 14.0) -> str:
+                                timeout: float = 25.0) -> str:
         """
         轮询等待机器人回执。
 
@@ -227,6 +227,9 @@ class CheckinEngine:
           2. 机器人常把已发的那条面板消息【原地编辑】成"签到成功"
              → 消息 id 不变，只比较 id 会漏掉
         所以同时比对「新消息」和「老消息内容发生变化」。
+
+        timeout 默认 25s(2026-11-04 MuseBoost 实测:bot 回执迟到,
+        14s 窗口漏抓,误报失败——实际签成功了)。
         """
         import time as _t
         deadline = _t.monotonic() + timeout
@@ -257,6 +260,16 @@ class CheckinEngine:
                     return self._extract_feedback(m)
 
             await asyncio.sleep(1.5)
+        # 最后补扫一次:回执可能在循环刚结束的那一刻到达
+        try:
+            msgs = await client.get_messages(entity, limit=4)
+            for m in msgs:
+                if not m.out and (m.id or 0) not in baseline:
+                    t = (m.message or "").strip()
+                    if t:
+                        return self._extract_feedback(m)
+        except Exception:
+            pass
         return ""
 
     @staticmethod
@@ -603,6 +616,11 @@ class CheckinEngine:
                 sent_msgs.append(await client.send_message(entity, command))
                 self.add_log(f"[{name}] 已发送 {command}，等待 {wait}s")
                 await asyncio.sleep(wait)
+                # 命令模式的回执可能迟到(2026-11-04 MuseBoost 实测:
+                # bot 回复超过 4+14s 窗口,误报失败),发送前先确认会话通畅
+                me = await client.get_me()
+                if me is None:
+                    raise RuntimeError("TG 会话已失效(get_me 返回空)")
             else:
                 # fresh_menu=True      每次都要先发指令刷新菜单（默认）
                 # fresh_menu=False     允许复用现有菜单（该 bot 的菜单不会被覆盖时才安全）
