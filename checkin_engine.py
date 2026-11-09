@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import re
+import unicodedata
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -28,6 +29,83 @@ ALREADY_WORDS = (
     "明天再来", "今日已签", "今日已领取", "已领取过", "已经领取",
 )
 ALREADY_PREFIX = "今日已签到 · "
+
+# ---- 算术验证码的符号归一化(2026-11-07 修) ----
+# 娘口三三 11-07 出的题是「1 − 1 = ?」,用的是 **U+2212 MINUS SIGN**,
+# 不是 ASCII 的 '-'(U+002D)。原正则 [+\-*×xX] 只认 ASCII 减号,
+# 于是报「验证码格式不认识」。注意 **NFKC 也不会把 U+2212 折成 '-'**
+# (实测确认),必须显式映射。同类变体还有 en/em dash、全角减号、各种乘号,
+# 一次覆盖,免得以后每换个符号就再挂一次。
+_MATH_DASHES = (
+    "\u2212"  # − MINUS SIGN   ← 本次元凶
+    "\u2013"  # – EN DASH
+    "\u2014"  # — EM DASH
+    "\u2012"  # ‒ FIGURE DASH
+    "\u2010"  # ‐ HYPHEN
+    "\u2011"  # ‑ NON-BREAKING HYPHEN
+    "\u2043"  # ⁃ HYPHEN BULLET
+    "\u2796"  # ➖ HEAVY MINUS SIGN
+    "\uFE63"  # ﹣ SMALL HYPHEN-MINUS
+    "\uFF0D"  # － FULLWIDTH HYPHEN-MINUS
+)
+_MATH_MULTS = (
+    "\u00D7"  # × MULTIPLICATION SIGN
+    "\u2715"  # ✕ MULTIPLICATION X
+    "\u2716"  # ✖ HEAVY MULTIPLICATION X
+    "\u2044"  # ⁄ FRACTION SLASH(不参与,留给除法)
+)
+_MATH_DIVS = (
+    "\u00F7"  # ÷ DIVISION SIGN
+    "\u2215"  # ∕ DIVISION SLASH
+)
+
+
+def normalize_math(text: str) -> str:
+    """把题目/按钮文本里的数学符号统一成 ASCII,供正则解析。
+
+    顺序很重要:先 NFKC 折全角数字和全角符号,再逐字符映射 U+2212 这类
+    「没有兼容性分解」的字符。NFKC 对 U+2212 无效,所以第二步不能省。
+    """
+    if not text:
+        return ""
+    s = unicodedata.normalize("NFKC", text)
+    out = []
+    for ch in s:
+        if ch in _MATH_DASHES:
+            out.append("-")
+        elif ch in ("\u00D7", "\u2715", "\u2716", "\u2217", "\uFF0A",
+                    "x", "X"):
+            out.append("*")
+        elif ch in _MATH_DIVS or ch == "/":
+            out.append("/")
+        else:
+            out.append(ch)
+    # 全角/不换行空格 → 普通空格,正则的 \s* 才吃得下
+    return "".join(out).replace("\u00A0", " ").replace("\u3000", " ")
+
+
+def parse_captcha(text: str):
+    """从题目文本里解析 (a, op, b, ans)。认不出返回 None。
+
+    只做纯计算,不碰 Telegram —— 可以离线单测。
+    支持 + - * /,以及 bot 可能出的全角数字(NFKC 已折成半角)。
+    """
+    s = normalize_math(text)
+    m = re.search(r"(\d+)\s*([+\-*/])\s*(\d+)\s*=", s)
+    if not m:
+        return None
+    a, op, b = int(m.group(1)), m.group(2), int(m.group(3))
+    if op == "+":
+        ans = a + b
+    elif op == "-":
+        ans = a - b
+    elif op == "*":
+        ans = a * b
+    else:                                  # 除法:bot 一般出整除
+        if b == 0 or a % b != 0:
+            return None                    # 非整除不猜,宁可不答也不点错
+        ans = a // b
+    return a, op, b, ans
 
 
 class CheckinEngine:
@@ -321,20 +399,32 @@ class CheckinEngine:
             msgs = await client.get_messages(entity, limit=4)
         except Exception as e:
             return False, f"读消息失败: {e}"
-        cap = next((m for m in msgs
-                    if m.text and "签到验证" in m.text and "=" in m.text
-                    and (m.id or 0) > min_id), None)
+        cap = next(
+            (m for m in msgs
+             if m.text and "签到验证" in m.text and "=" in normalize_math(m.text)
+             and (m.id or 0) > min_id),
+            None,
+        )
         if cap is None:
             return False, None
-        m = re.search(r"(\d+)\s*([+\-*×xX])\s*(\d+)\s*=", cap.text)
-        if not m:
-            return True, f"验证码格式不认识: {cap.text[:60]}"
-        a, op, b = int(m.group(1)), m.group(2).replace("X", "x"), int(m.group(3))
-        ans = a + b if op == "+" else a - b if op == "-" else a * b
+
+        parsed = parse_captcha(cap.text)
+        if parsed is None:
+            # 把归一化后的文本也带出来,方便下次遇到新变体一眼看清
+            return True, (f"验证码格式不认识: {cap.text[:60]!r}"
+                          f" (归一化后: {normalize_math(cap.text)[:60]!r})")
+        a, op, b, ans = parsed
+
+        # 按钮文字也可能是全角数字/带空格,同样归一化后再比对
         btns = [btn for row in (cap.buttons or []) for btn in row]
-        target = next((btn for btn in btns if btn.text.strip() == str(ans)), None)
+        target = next(
+            (btn for btn in btns
+             if normalize_math(btn.text).strip() == str(ans)),
+            None,
+        )
         if target is None:
-            return True, f"算出 {ans} 但选项里没有(选项: {[x.text for x in btns]})"
+            return True, (f"算出 {ans} 但选项里没有"
+                          f"(选项: {[x.text for x in btns]})")
         popup = await self._click(target)
         await asyncio.sleep(2)
         detail = f"验证码 {a} {op} {b} = {ans},已点对按钮"
@@ -681,8 +771,20 @@ class CheckinEngine:
                 cap_seen, cap_detail = await self._solve_captcha(
                     client, entity, min_id=max(min_id, 0))
                 if cap_seen:
+                    solved = "已点对" in (cap_detail or "")
                     self.add_log(f"[{name}] 🧮 {cap_detail}",
-                                 "success" if "已点对" in cap_detail else "warn")
+                                 "success" if solved else "warn")
+                    if not solved:
+                        # 关键:验证码没答上来就不要再拿题目原文当"签到回执"。
+                        # 11-07 那次就是这样,detail 变成一整段验证题,
+                        # ok=false 但看不出根因,还容易被误判成 session 失效。
+                        detail = f"验证码未答: {cap_detail}"
+                        self.add_log(f"[{name}] 验证码未通过,本次判失败", "warn")
+                        config_mgr.update_task_status(task_id, detail, now, False)
+                        if cleanup:
+                            await self._cleanup(client, sent_msgs)
+                        return {"id": task_id, "name": name, "ok": False,
+                                "detail": detail, "source": "captcha"}
                     popup = None
                     await asyncio.sleep(2)
 
