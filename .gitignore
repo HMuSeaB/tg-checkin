@@ -11,6 +11,10 @@ config/*.session-journal
 config/*.session-wal
 config/*.session-shm
 
+# 改配置时留的备份:内容同样含账号信息,别提交
+config/*.bak
+config/*.bak-*
+
 # 本地工作记录（含账号 user_id 等信息）
 .workbuddy/
 
